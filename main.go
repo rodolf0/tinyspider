@@ -28,28 +28,36 @@ func newHTMLDecoder(r io.Reader) *xml.Decoder {
 	return d
 }
 
+// fill in u with base's info when missing
+func completeURL(u, base *url.URL) {
+	if u.Scheme == "" {
+		u.Scheme = base.Scheme
+	}
+	if u.Host == "" {
+		u.Host = base.Host
+	}
+}
+
 // return a channel from which al outgoing links can be read
-func LinkGenerator(rawurl string) <-chan *url.URL {
-	var queue chan *url.URL
-	if baseurl, err := url.Parse(rawurl); err == nil {
-		queue = make(chan *url.URL, 20)
-		go func() {
-			defer close(queue)
-			if reply, err := http.Get(baseurl.String()); err == nil {
-				defer reply.Body.Close()
-				var d = newHTMLDecoder(reply.Body)
-				for token, err := d.Token(); err == nil; token, err = d.Token() {
-					if t, ok := token.(xml.StartElement); ok {
-						if t.Name.Local == "a" {
-							if link, err := url.Parse(ExtractHref(t)); err == nil {
-								queue <- link
-							}
+func LinkGenerator(baseurl *url.URL) <-chan *url.URL {
+	var queue = make(chan *url.URL, 20)
+	go func() {
+		defer close(queue)
+		if reply, err := http.Get(baseurl.String()); err == nil {
+			defer reply.Body.Close()
+			var d = newHTMLDecoder(reply.Body)
+			for token, err := d.Token(); err == nil; token, err = d.Token() {
+				if t, ok := token.(xml.StartElement); ok {
+					if t.Name.Local == "a" {
+						if link, err := url.Parse(ExtractHref(t)); err == nil {
+							completeURL(link, baseurl)
+							queue <- link
 						}
 					}
 				}
 			}
-		}()
-	}
+		}
+	}()
 	return queue
 }
 
@@ -58,9 +66,9 @@ func init() {
 }
 
 func main() {
-	fmt.Printf("Links extracted from %v\n", flag.Arg(0))
+	var baseurl, _ = url.Parse(flag.Arg(0))
 
-	for l := range LinkGenerator(flag.Arg(0)) {
+	for l := range LinkGenerator(baseurl) {
 		fmt.Println(l)
 	}
 }
