@@ -1,74 +1,77 @@
 package main
 
 import (
-	"encoding/xml"
+	"concurrent"
+	"container/list"
 	"flag"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
+	"os"
+	"sync"
+	"time"
 )
 
-// return the href value of an a-html-element
-func ExtractHref(aElem xml.StartElement) string {
-	for _, attr := range aElem.Attr {
-		if attr.Name.Local == "href" {
-			return attr.Value
-		}
-	}
-	return ""
-}
-
-// tune an xml decoder to be more relaxed an parse HTML
-func newHTMLDecoder(r io.Reader) *xml.Decoder {
-	var d = xml.NewDecoder(r)
-	d.Strict = false
-	d.AutoClose = xml.HTMLAutoClose
-	d.Entity = xml.HTMLEntity
-	return d
-}
-
-// fill in u with base's info when missing
-func completeURL(u, base *url.URL) {
-	if u.Scheme == "" {
-		u.Scheme = base.Scheme
-	}
-	if u.Host == "" {
-		u.Host = base.Host
-	}
-}
-
-// return a channel from which al outgoing links can be read
-func LinkGenerator(baseurl *url.URL) <-chan *url.URL {
-	var queue = make(chan *url.URL, 20)
-	go func() {
-		defer close(queue)
-		if reply, err := http.Get(baseurl.String()); err == nil {
-			defer reply.Body.Close()
-			var d = newHTMLDecoder(reply.Body)
-			for token, err := d.Token(); err == nil; token, err = d.Token() {
-				if t, ok := token.(xml.StartElement); ok {
-					if t.Name.Local == "a" {
-						if link, err := url.Parse(ExtractHref(t)); err == nil {
-							completeURL(link, baseurl)
-							queue <- link
-						}
-					}
-				}
-			}
-		}
-	}()
-	return queue
-}
+var baseurl *url.URL
 
 func init() {
+	var e error
 	flag.Parse()
+	if baseurl, e = url.Parse(flag.Arg(0)); e != nil {
+		fmt.Fprintln(os.Stderr, "usage: tinyspider <start-url>")
+		os.Exit(1)
+	}
 }
 
+// print all reachable domains from a start URL
 func main() {
-	var baseurl, _ = url.Parse(flag.Arg(0))
+	var visited = make(map[string]bool)
+	var pending = list.New()
+	var pool = concurrent.MakeWorkerPool(100)
+	var condvar = sync.NewCond(&sync.Mutex{})
+	var lock sync.Mutex
 
-	for l := range LinkGenerator(baseurl) {
-		fmt.Println(l)
+	var uniquedomains = make(map[string]bool)
+
+	// signal the condvar every second to be able to check if work is done
+	go func() {
+		for {
+			time.Sleep(time.Second)
+			condvar.Signal()
+		}
+	}()
+
+	pending.PushBack(baseurl)
+
+	for {
+
+		condvar.L.Lock()
+		for !(pending.Len() > 0) {
+			// if the pending queue is empty and there's no workers getting links
+			if pool.Running() == 0 {
+				return
+			}
+			condvar.Wait()
+		}
+		var theUrl = pending.Remove(pending.Front()).(*url.URL)
+		condvar.L.Unlock()
+
+		/*fmt.Fprintf(os.Stderr, "\r%v workers running, queue size %v", pool.Running(), pending.Len())*/
+
+		pool.Schedule(func(u ...interface{}) {
+			for l := range LinkGenerator(u[0].(*url.URL)) {
+				lock.Lock()
+				if _, ok := visited[l.String()]; !ok {
+					visited[l.String()] = true
+					pending.PushBack(l)
+					condvar.Signal()
+					// just print the hostname
+					if _, ok := uniquedomains[l.Host]; !ok {
+						uniquedomains[l.Host] = true
+						fmt.Println(l.Host)
+					}
+				}
+				lock.Unlock()
+			}
+		}, theUrl)
 	}
 }
