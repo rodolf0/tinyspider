@@ -38,7 +38,7 @@ func completeURL(u, base *url.URL) {
 
 // return a channel from which al outgoing links can be read
 func LinkGenerator(baseurl *url.URL) <-chan *url.URL {
-	var queue = make(chan *url.URL, 100)
+	var queue = make(chan *url.URL, 64)
 	go func() {
 		defer close(queue)
 		if reply, err := http.Get(baseurl.String()); err == nil {

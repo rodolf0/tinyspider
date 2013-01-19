@@ -1,77 +1,127 @@
+// crawlers are workers reading off a channel urls to explore,
+// whatever edges come out of each explored url are collected
+// by a deduplicator, a consumer reading off the deduplicator
+// can print those urls and inject them into the explore queue
+
 package main
 
 import (
-	"concurrent"
-	"container/list"
+	"bufio"
 	"flag"
 	"fmt"
 	"net/url"
 	"os"
 	"sync"
-	"time"
 )
 
-var baseurl *url.URL
+var (
+	baseurl  = flag.String("baseurl", "", "start url")
+	maxhosts = flag.Int("maxhosts", 0, "maximum number of hosts to print")
+	// maxqueue: after maxqueue is reached urls will be output but no injected for crawling
+	maxqueue = flag.Uint("maxqueue", 1<<16, "max unique urls to queue for discovery")
+	startUrl *url.URL
+)
 
 func init() {
 	var e error
 	flag.Parse()
-	if baseurl, e = url.Parse(flag.Arg(0)); e != nil {
-		fmt.Fprintln(os.Stderr, "usage: tinyspider <start-url>")
+	if startUrl, e = url.Parse(*baseurl); e != nil {
+		fmt.Fprintln(os.Stderr, "usage: tinyspider -baseurl <start-url>")
+		flag.Usage()
 		os.Exit(1)
 	}
 }
 
-// print all reachable domains from a start URL
-func main() {
-	var visited = make(map[string]bool)
-	var pending = list.New()
-	var pool = concurrent.MakeWorkerPool(100)
-	var condvar = sync.NewCond(&sync.Mutex{})
-	var lock sync.Mutex
-
-	var uniquedomains = make(map[string]bool)
-
-	// signal the condvar every second to be able to check if work is done
+// wait on input for urls to crawl and report outgoing edges on output
+func Crawler(input <-chan *url.URL) <-chan *url.URL {
+	var output = make(chan *url.URL, 64) // same buffer as LinkGenerator
 	go func() {
-		for {
-			time.Sleep(time.Second)
-			condvar.Signal()
+		defer close(output)
+		for i := range input {
+			for link := range LinkGenerator(i) {
+				// TODO: let the link-generator take an output channel directly
+				output <- link
+			}
 		}
 	}()
+	return output
+}
 
-	pending.PushBack(baseurl)
-
-	for {
-
-		condvar.L.Lock()
-		for !(pending.Len() > 0) {
-			// if the pending queue is empty and there's no workers getting links
-			if pool.Running() == 0 {
-				return
+// fan-in input from multiple Crawlers and output unique urls
+func UrlDeduplicator(inputs ...<-chan *url.URL) <-chan *url.URL {
+	// emulation of select with a dynamic number of cases
+	var fanin = make(chan *url.URL, len(inputs))
+	var fanin_wg sync.WaitGroup
+	fanin_wg.Add(len(inputs))
+	for _, input_i := range inputs {
+		go func(input <-chan *url.URL) {
+			for i := range input {
+				fanin <- i
 			}
-			condvar.Wait()
-		}
-		var theUrl = pending.Remove(pending.Front()).(*url.URL)
-		condvar.L.Unlock()
-
-		/*fmt.Fprintf(os.Stderr, "\r%v workers running, queue size %v", pool.Running(), pending.Len())*/
-
-		pool.Schedule(func(u ...interface{}) {
-			for l := range LinkGenerator(u[0].(*url.URL)) {
-				lock.Lock()
-				if _, ok := visited[l.String()]; !ok {
-					visited[l.String()] = true
-					pending.PushBack(l)
-					condvar.Signal()
-					// just print the hostname
-					if _, ok := uniquedomains[l.Host]; !ok {
-						uniquedomains[l.Host] = true
-						fmt.Println(l.Host)
-					}
-				}
-				lock.Unlock()
-			}
-		}, theUrl)
+			fanin_wg.Done()
+		}(input_i)
 	}
+	go func() {
+		fanin_wg.Wait()
+		close(fanin)
+	}()
+	var output = make(chan *url.URL)
+	go func() {
+		defer close(output)
+		var unique_urls = make(map[string]bool)
+		for i := range fanin {
+			if _, ok := unique_urls[i.String()]; !ok {
+				unique_urls[i.String()] = true
+				output <- i
+			}
+		}
+	}()
+	return output
+}
+
+// print all reachable domains from a start URL
+func main() {
+	var input = make(chan *url.URL, *maxqueue)
+	var output = UrlDeduplicator(
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input))
+	input <- startUrl
+
+	// print unique hostnames reached from startUrl
+	var buf = bufio.NewWriter(os.Stdout)
+	fmt.Fprintln(buf, startUrl.Host)
+	var unique_hosts = make(map[string]bool)
+	for u := range output {
+		if _, ok := unique_hosts[u.Host]; !ok {
+			unique_hosts[u.Host] = true
+			fmt.Fprintln(buf, u.Host)
+			if *maxhosts > 0 && len(unique_hosts) >= *maxhosts {
+				break
+			}
+		}
+		// don't block... we can't hold the exponential growth
+		// of the web within a fixed size buffer... drop what we can't investigate
+		select {
+		case input <- u:
+		default:
+		}
+	}
+	close(input)
 }
