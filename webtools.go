@@ -37,24 +37,19 @@ func completeURL(u, base *url.URL) {
 }
 
 // return a channel from which al outgoing links can be read
-func LinkGenerator(baseurl *url.URL) <-chan *url.URL {
-	var queue = make(chan *url.URL, 64)
-	go func() {
-		defer close(queue)
-		if reply, err := http.Get(baseurl.String()); err == nil {
-			defer reply.Body.Close()
-			var d = newHTMLDecoder(reply.Body)
-			for token, err := d.Token(); err == nil; token, err = d.Token() {
-				if t, ok := token.(xml.StartElement); ok {
-					if t.Name.Local == "a" {
-						if link, err := url.Parse(extractHref(t)); err == nil {
-							completeURL(link, baseurl)
-							queue <- link
-						}
+func LinkGenerator(baseurl *url.URL, queue chan<- *url.URL) {
+	if reply, err := http.Get(baseurl.String()); err == nil {
+		defer reply.Body.Close()
+		var d = newHTMLDecoder(reply.Body)
+		for token, err := d.Token(); err == nil; token, err = d.Token() {
+			if t, ok := token.(xml.StartElement); ok {
+				if t.Name.Local == "a" {
+					if link, err := url.Parse(extractHref(t)); err == nil {
+						completeURL(link, baseurl)
+						queue <- link
 					}
 				}
 			}
 		}
-	}()
-	return queue
+	}
 }

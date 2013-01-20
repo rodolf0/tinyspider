@@ -11,14 +11,17 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"runtime"
+	"runtime/pprof"
 	"sync"
+	"time"
 )
 
 var (
 	baseurl  = flag.String("baseurl", "", "start url")
 	maxhosts = flag.Int("maxhosts", 0, "maximum number of hosts to print")
 	// maxqueue: after maxqueue is reached urls will be output but no injected for crawling
-	maxqueue = flag.Uint("maxqueue", 1<<16, "max unique urls to queue for discovery")
+	maxqueue = flag.Uint("maxqueue", 1<<20, "max unique urls to queue for discovery")
 	startUrl *url.URL
 )
 
@@ -34,14 +37,11 @@ func init() {
 
 // wait on input for urls to crawl and report outgoing edges on output
 func Crawler(input <-chan *url.URL) <-chan *url.URL {
-	var output = make(chan *url.URL, 64) // same buffer as LinkGenerator
+	var output = make(chan *url.URL, 64)
 	go func() {
 		defer close(output)
 		for i := range input {
-			for link := range LinkGenerator(i) {
-				// TODO: let the link-generator take an output channel directly
-				output <- link
-			}
+			LinkGenerator(i, output)
 		}
 	}()
 	return output
@@ -81,8 +81,45 @@ func UrlDeduplicator(inputs ...<-chan *url.URL) <-chan *url.URL {
 
 // print all reachable domains from a start URL
 func main() {
+	go func() {
+		f, _ := os.Create("cpuprof")
+		pprof.StartCPUProfile(f)
+		time.Sleep(120 * time.Second)
+		pprof.StopCPUProfile()
+	}()
+
 	var input = make(chan *url.URL, *maxqueue)
 	var output = UrlDeduplicator(
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
+		Crawler(input), Crawler(input),
 		Crawler(input), Crawler(input),
 		Crawler(input), Crawler(input),
 		Crawler(input), Crawler(input),
@@ -104,10 +141,19 @@ func main() {
 		Crawler(input), Crawler(input))
 	input <- startUrl
 
+	var unique_hosts = make(map[string]bool)
+
+	go func() {
+		for {
+			time.Sleep(10 * time.Second)
+			fmt.Fprintf(os.Stderr, "go's: %v, input: %v, output: %v, hosts: %v\n",
+				runtime.NumGoroutine(), len(input), len(output), len(unique_hosts))
+		}
+	}()
+
 	// print unique hostnames reached from startUrl
 	var buf = bufio.NewWriter(os.Stdout)
 	fmt.Fprintln(buf, startUrl.Host)
-	var unique_hosts = make(map[string]bool)
 	for u := range output {
 		if _, ok := unique_hosts[u.Host]; !ok {
 			unique_hosts[u.Host] = true
