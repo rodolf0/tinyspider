@@ -40,8 +40,13 @@ func Crawler(input <-chan *url.URL) <-chan *url.URL {
 	var output = make(chan *url.URL, 64)
 	go func() {
 		defer close(output)
-		for i := range input {
-			LinkGenerator(i, output)
+		for {
+			select {
+			case i := <-input:
+				LinkGenerator(i, output)
+			case <-time.After(5 * time.Second):
+				return
+			}
 		}
 	}()
 	return output
@@ -89,56 +94,11 @@ func main() {
 	}()
 
 	var input = make(chan *url.URL, *maxqueue)
-	var output = UrlDeduplicator(
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input),
-		Crawler(input), Crawler(input))
+	var crawlers []<-chan *url.URL;
+	for i := 0; i < 50; i++ {
+		crawlers = append(crawlers, Crawler(input))
+	}
+	var output = UrlDeduplicator(crawlers...)
 	input <- startUrl
 
 	var unique_hosts = make(map[string]bool)
