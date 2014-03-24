@@ -60,3 +60,17 @@ func (b *Bloom) Add(value string) {
 		b.set(hash % b.size)
 	}
 }
+
+// CheckedAdd adds the value and tells if it was there
+// with the setup false-positive probability of the filter
+func (b *Bloom) AddExisted(value string) bool {
+	existed := true
+	for i := 0; i < len(b.keys); i++ {
+		hash := SipHash24([]byte(value), b.keys[i]) % b.size
+		if !b.get(hash) {
+			existed = false
+		}
+		b.set(hash)
+	}
+	return existed
+}
