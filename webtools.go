@@ -2,54 +2,64 @@ package main
 
 import (
 	"encoding/xml"
-	"io"
 	"net/http"
 	"net/url"
 )
 
-// return the href value of an a-html-element
-func extractHref(aElem xml.StartElement) string {
-	for _, attr := range aElem.Attr {
-		if attr.Name.Local == "href" {
-			return attr.Value
+type HtmlParser struct {
+	url *url.URL
+}
+
+func NewHtmlParser(baseurl interface{}) *HtmlParser {
+	switch _baseurl := baseurl.(type) {
+	case string:
+		if _url, err := url.Parse(_baseurl); err == nil {
+			return &HtmlParser{url: _url}
 		}
+	case *url.URL:
+		if _baseurl == nil {
+			return nil
+		}
+		return &HtmlParser{url: _baseurl}
 	}
-	return ""
+	return nil
 }
 
-// tune an xml decoder to be more relaxed an parse HTML
-func newHTMLDecoder(r io.Reader) *xml.Decoder {
-	var d = xml.NewDecoder(r)
-	d.Strict = false
-	d.AutoClose = xml.HTMLAutoClose
-	d.Entity = xml.HTMLEntity
-	return d
-}
-
-// fill in u with base's info when missing
-func completeURL(u, base *url.URL) {
-	if u.Scheme == "" {
-		u.Scheme = base.Scheme
-	}
-	if u.Host == "" {
-		u.Host = base.Host
-	}
-}
-
-// return a channel from which al outgoing links can be read
-func LinkGenerator(baseurl *url.URL, queue chan<- *url.URL) {
-	if reply, err := http.Get(baseurl.String()); err == nil {
+func (p *HtmlParser) ExtractLinks() []*url.URL {
+	var d *xml.Decoder
+	if reply, err := http.Get(p.url.String()); err != nil {
+		return nil
+	} else {
 		defer reply.Body.Close()
-		var d = newHTMLDecoder(reply.Body)
-		for token, err := d.Token(); err == nil; token, err = d.Token() {
-			if t, ok := token.(xml.StartElement); ok {
-				if t.Name.Local == "a" {
-					if link, err := url.Parse(extractHref(t)); err == nil {
-						completeURL(link, baseurl)
-						queue <- link
-					}
+		d = xml.NewDecoder(reply.Body)
+		d.Strict = false
+		d.AutoClose = xml.HTMLAutoClose
+		d.Entity = xml.HTMLEntity
+	}
+
+	extractHref := func(aElem xml.StartElement) string {
+		for _, attr := range aElem.Attr {
+			if attr.Name.Local == "href" {
+				return attr.Value
+			}
+		}
+		return ""
+	}
+
+	var links = make([]*url.URL, 0, 32)
+
+	for token, err := d.Token(); err == nil; token, err = d.Token() {
+		if t, ok := token.(xml.StartElement); ok && t.Name.Local == "a" {
+			if href := extractHref(t); href != "" {
+				if link, err := url.Parse(href); err == nil {
+					link = p.url.ResolveReference(link)
+					link.RawQuery = ""
+					link.Fragment = ""
+					links = append(links, link)
 				}
 			}
 		}
 	}
+
+	return links
 }

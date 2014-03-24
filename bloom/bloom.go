@@ -26,7 +26,7 @@ p is the false positive probability
 */
 func newbloom(n uint64, p float64) (b Bloom) {
 	m := math.Ceil(-float64(n) * math.Log(p) / math.Ln2 / math.Ln2)
-	k := math.Ceil(m * math.Ln2 / float64(n))
+	k := math.Ceil(-math.Log(p) / math.Ln2)
 	// fmt.Printf("MiB %v keys %v\n", m/8/1024/1024, k)
 	arrsize := (uint64(m) + 8) / 8
 	b.bitarray = make([]uint8, arrsize)
